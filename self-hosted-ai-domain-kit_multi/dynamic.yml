@@ -1,0 +1,26 @@
+http:
+  routers:
+    n8n-external:
+      rule: "Host(`n8n.domain.com`)"
+      entryPoints:
+        - websecure
+      service: n8n-external
+      tls:
+        certResolver: mytlschallenge
+    n9n-external:
+      rule: "Host(`n9n.domain.com)"
+      entryPoints:
+        - websecure
+      service: n9n-external
+      tls:
+        certResolver: mytlschallenge
+  services:
+    n8n-external:
+      loadBalancer:
+        servers:
+          - url: "192.168.0.33:5678"
+    n9n-external:
+      loadBalancer:
+        servers:
+          - url: "192.168.0.5:5678"
+

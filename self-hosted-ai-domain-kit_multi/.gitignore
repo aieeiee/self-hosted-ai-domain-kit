@@ -4,10 +4,8 @@
 !.env.example
 
 # 캐시 및 임시 파일
-**/.cache/
-**/.tmp/
-**/cache/
-**/tmp/
+.cache/
+.tmp/
 *.log
 *.pid
 *.lock
@@ -27,12 +25,11 @@ videos/**/*.m4a
 videos/**/*.flac
 
 # 백업 파일
-**/backup/
 n8n/backup/
+*/backup/
 
 # Ollama 모델 파일
 .cache/ollama/
-**/ollama_models/
 
 # Whisper 캐시
 **/whisper-cache/

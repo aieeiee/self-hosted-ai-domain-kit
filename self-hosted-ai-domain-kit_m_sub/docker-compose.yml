@@ -1,0 +1,242 @@
+networks:
+  n8n_network:
+    name: self_hosted_ai_domain_kit
+    driver: bridge
+
+x-n8n: &service-n8n
+  image: n8nio/n8n:latest
+  networks:
+    - n8n_network
+  environment:
+    - DB_TYPE=postgresdb
+    - DB_POSTGRESDB_HOST=postgres
+    - DB_POSTGRESDB_USER=${POSTGRES_USER}
+    - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    - n8n_DIAGNOSTICS_ENABLED=false
+    - n8n_PERSONALIZATION_ENABLED=false
+    - n8n_ENCRYPTION_KEY=${n8n_ENCRYPTION_KEY}
+    - n8n_USER_MANAGEMENT_JWT_SECRET=${n8n_USER_MANAGEMENT_JWT_SECRET}
+  links:
+    - postgres
+
+x-ollama: &service-ollama
+  image: ollama/ollama:latest
+  networks:
+    - n8n_network
+  restart: unless-stopped
+  ports:
+    - "11434:11434"
+  volumes:
+    - ./.cache/ollama:/root/.ollama
+
+x-init-ollama: &init-ollama
+  image: ollama/ollama:latest
+  networks:
+    - n8n_network
+  volumes:
+    - ./.cache/ollama:/root/.ollama
+  entrypoint: /bin/sh
+  command:
+    - "-c"
+    - "sleep 3; OLLAMA_HOST=ollama:11434"
+
+x-whisper-asr: &service-whisper-asr
+  networks:
+    - n8n_network
+  restart: unless-stopped
+  ports:
+    - "9000:9000"
+  volumes:
+    - whisper-cache:/root/.cache
+
+services:
+  flowise:
+    image: flowiseai/flowise
+    networks:
+      - n8n_network
+    restart: unless-stopped
+    container_name: flowise
+    environment:
+      - PORT=3001
+    ports:
+      - "3001:3001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./n8n/backup/.flowise:/root/.flowise
+    entrypoint: /bin/sh -c "sleep 3; flowise start"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    networks:
+      - n8n_network
+    restart: unless-stopped
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./n8n/backup/open-webui:/app/backend/data
+
+  postgres:
+    image: postgres:16-alpine
+    networks:
+      - n8n_network
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    volumes:
+      - ./n8n/backup/postgresql:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  n8n-import:
+    <<: *service-n8n
+    image: n8nio/n8n:latest
+    container_name: n8n-import
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - n8n_DIAGNOSTICS_ENABLED=false
+      - n8n_PERSONALIZATION_ENABLED=false
+      - n8n_ENCRYPTION_KEY=${n8n_ENCRYPTION_KEY}
+      - n8n_USER_MANAGEMENT_JWT_SECRET=${n8n_USER_MANAGEMENT_JWT_SECRET}
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - "sleep 3 && echo 'Attempting import...' && n8n import:credentials --separate --input=/backup/credentials && n8n import:workflow --separate --input=/backup/workflows"
+    volumes:
+      - ./n8n/backup:/backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    <<: *service-n8n
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - n8n_AUTO_EDIT=true
+      - n8n_AUTO_EDIT_TIMEOUT=15000
+      - n8n_AUTO_EDIT_MAX_CHUNK_LENGTH=10000
+      - n8n_SECURE_COOKIE=false
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/backup:/backup/
+      - ./data/shared:/data/shared
+      - ./data/videos:/data/videos
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n-import:
+        condition: service_completed_successfully
+     
+  qdrant:
+    image: qdrant/qdrant
+    container_name: qdrant
+    networks:
+      - n8n_network
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./n8n/backup/qdrant:/qdrant/storage
+
+  whisper-asr-cpu:
+    profiles: ["cpu"]
+    build:
+      context: whisper-asr-webservice
+      dockerfile: Dockerfile
+    container_name: whisper-asr
+    networks:
+      - n8n_network
+    restart: unless-stopped
+    environment:
+      - ASR_MODEL=base
+    ports:
+      - "9000:9000"
+    volumes:
+      - whisper-cache:/root/.cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  whisper-asr-gpu:
+    profiles: ["gpu-nvidia"]
+    build:
+      context: whisper-asr-webservice
+      dockerfile: Dockerfile.gpu
+    container_name: whisper-asr
+    networks:
+      - n8n_network
+    restart: unless-stopped
+    environment:
+      - ASR_MODEL=medium
+    ports:
+      - "9001:9001"
+    volumes:
+      - whisper-cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+
+  ollama-cpu:
+    profiles: ["cpu"]
+    <<: *service-ollama
+
+  ollama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *service-ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+
+  ollama-pull-llama-cpu:
+    profiles: ["cpu"]
+    <<: *init-ollama
+    depends_on:
+      - ollama-cpu
+
+  ollama-pull-llama-gpu:
+    profiles: ["gpu-nvidia"]
+    <<: *init-ollama
+    command:
+      - "-c"
+      - "sleep 3; OLLAMA_HOST=ollama:11434 ollama pull llama3.2"
+    depends_on:
+      - ollama-gpu
+volumes:
+  whisper-cache:
+  n8n_data:
+

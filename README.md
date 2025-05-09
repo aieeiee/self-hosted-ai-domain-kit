@@ -125,6 +125,16 @@ The kit organizes files and directories as follows:
 
 - **.cache/ollama/** - Cache directory for Ollama models
 
+## Project Structure Usage
+
+This repository contains different configurations tailored for specific use cases. Please choose the one that best fits your needs:
+
+- **`self-hosted-ai-domain-kit_o/`**: Use this configuration when you want to host a single domain with an HTTPS certificate. This is ideal for simpler setups where only one service or application needs to be exposed.
+
+- **`self-hosted-ai-domain-kit_multi/`**: Opt for this setup if you need to host multiple domains or subdomains, each with its own HTTPS certificate. It uses a `dynamic.yml` file to route traffic to the appropriate services. This is suitable for more complex deployments involving several applications.
+
+- **`self-hosted-ai-domain-kit_m_sub/`**: This configuration is designed for scenarios where you are connecting multiple domains/subdomains, and this particular instance acts as a 'sub' or 'worker' machine. It operates without its own Traefik instance, relying on an external router or load balancer for traffic management and SSL termination.
+
 ## Accessing local files
 
 The shared folders are mounted to the n8n container to allow access to files on disk:
